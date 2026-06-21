@@ -1,0 +1,86 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userRole(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid))
+        ? get(/databases/$(database)/documents/users/$(uid)).data.role
+        : null;
+    }
+
+    function isAdminOrOwner() {
+      return signedIn() && userRole(request.auth.uid) in ['admin', 'owner'];
+    }
+
+    function isOwner() {
+      return signedIn() && userRole(request.auth.uid) == 'owner';
+    }
+
+    function isPublicSettingsDoc(docId) {
+      return docId in ['global', 'auth', 'ui', 'featureFlags'];
+    }
+
+    function validNewUserData() {
+      return request.resource.data.keys().hasOnly([
+        'firstName',
+        'lastName',
+        'email',
+        'role',
+        'school',
+        'schoolVerified',
+        'createdAt',
+        'lastLogin',
+        'language',
+        'theme',
+        'profilePhoto',
+        'passwordChanged',
+        'accountStatus'
+      ])
+      && request.resource.data.firstName is string
+      && request.resource.data.lastName is string
+      && request.resource.data.email is string
+      && request.resource.data.role == 'student'
+      && request.resource.data.school == ''
+      && request.resource.data.schoolVerified == false
+      && request.resource.data.language in ['nl', 'en']
+      && request.resource.data.theme in ['light', 'dark']
+      && request.resource.data.profilePhoto == ''
+      && request.resource.data.passwordChanged == false
+      && request.resource.data.accountStatus == 'active';
+    }
+
+    function validOwnUpdate() {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly([
+        'firstName',
+        'lastName',
+        'language',
+        'theme',
+        'profilePhoto',
+        'passwordChanged',
+        'lastLogin'
+      ]);
+    }
+
+    match /settings/{docId} {
+      allow read: if true;
+      allow write: if isOwner();
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdminOrOwner());
+      allow create: if signedIn() && request.auth.uid == uid && validNewUserData();
+      allow update: if signedIn() && (
+        (request.auth.uid == uid && validOwnUpdate()) ||
+        isAdminOrOwner()
+      );
+      allow delete: if isOwner();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
